@@ -1,4 +1,4 @@
-# Memora - 网页记忆系统
+# Memora - ai agent记忆系统
 
 <p align="center">
   <img src="logo.png" width="200" alt="Memora Logo">
@@ -6,7 +6,7 @@
 
 > ✨ Memory + Aurora — 记忆极光，让知识自由流动
 
-将 nanobot 对话历史转换为"网页"节点，使用 PageRank 算法进行重要性排序，通过多阶段混合检索（TF-IDF + 语义相似度 + PageRank + 图扩散）实现智能检索。
+将 ai agent如nanobot 对话历史转换为"网页"节点，使用 PageRank 算法进行重要性排序，通过多阶段混合检索（TF-IDF + 语义相似度 + PageRank + 图扩散）实现智能检索。
 
 ## Core Concept
 
@@ -123,7 +123,7 @@ python -m memora_query --stats  # 查看统计
 | **semantic_expansion** | 语义top-5 → 扩散50 → 精排 | 短/模糊查询(≤8字) | 73.3% | 0.592 | 🐢 1.20s |
 | **hybrid** ⭐ | TF-IDF召回10 → 扩散30 → 精排 | 中等查询(8-20字) | **86.7%** | **0.739** | ⚖️ 0.85s |
 
-> 基于 LongMemEval 测试集(15题)的基准测试结果
+> 基于自建 测试集(30题)的基准测试结果
 
 **自动选择规则:**
 - ≤5字 → `semantic_expansion`
