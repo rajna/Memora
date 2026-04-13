@@ -1,4 +1,4 @@
-# Memora - 网页记忆系统
+# Memora - ai agent记忆系统
 
 <p align="center">
   <img src="logo.png" width="200" alt="Memora Logo">
