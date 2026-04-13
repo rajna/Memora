@@ -314,7 +314,8 @@ def generate_html_visualization(graph_data: dict, output_path: str):
         }}
         #graph {{
             width: 100%;
-            height: 600px;
+            height: calc(100vh - 200px);
+            min-height: 500px;
             border-radius: 12px;
             background: rgba(8, 10, 14, 0.95);
             border: 1px solid rgba(0, 212, 255, 0.2);
@@ -370,12 +371,14 @@ def generate_html_visualization(graph_data: dict, output_path: str):
         .legend-temporal {{ background: rgba(255, 165, 0, 0.7); }}
         .legend-tag {{ background: rgba(138, 43, 226, 0.7); }}
         .top-nodes {{
-            margin-top: 25px;
+            margin-top: 20px;
             background: linear-gradient(135deg, rgba(13, 17, 23, 0.95) 0%, rgba(22, 27, 34, 0.9) 100%);
-            padding: 20px;
+            padding: 15px 20px;
             border-radius: 12px;
             border: 1px solid rgba(0, 212, 255, 0.15);
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            max-height: 280px;
+            overflow-y: auto;
         }}
         .top-nodes h3 {{
             font-family: 'JetBrains Mono', monospace;
@@ -451,7 +454,7 @@ def generate_html_visualization(graph_data: dict, output_path: str):
     <div id="graph"></div>
     
     <div class="top-nodes">
-        <h3>Top 20 PageRank Nodes</h3>
+        <h3>Top 10 PageRank Nodes</h3>
         <table>
             <tr>
                 <th>Rank</th>
@@ -462,8 +465,8 @@ def generate_html_visualization(graph_data: dict, output_path: str):
             </tr>
 """
 
-    # 添加前20节点
-    for i, node in enumerate(graph_data['nodes'][:20], 1):
+    # 添加前10节点
+    for i, node in enumerate(graph_data['nodes'][:10], 1):
         html += f"""            <tr>
                 <td>{i}</td>
                 <td title="{node['id']}">{node['label']}</td>

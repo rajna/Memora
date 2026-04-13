@@ -17,6 +17,12 @@
    (TF-IDF召回 → 子图扩散 → 语义精排)
 ```
 
+## System Overview
+
+<p align="center">
+  <img src="info.png" width="800" alt="Memora System Info">
+</p>
+
 ## Architecture
 
 | 模块 | 文件 | 职责 |
