@@ -90,19 +90,17 @@ from src.retrieval import TwoStageRetriever
 
 retriever = TwoStageRetriever(ms.storage)
 
-# 混合检索（推荐）- TF-IDF召回 + 子图扩散 + 语义精排
-results = retriever.search_with_graph_expansion(
-    "项目bug修复", 
-    top_k=5,           # 返回数量
-    recall_k=10,       # TF-IDF召回数量
-    expansion_depth=1  # 图扩散深度
-)
+# Hybrid 检索（统一默认方法）- TF-IDF召回 + 子图扩散 + 语义精排
+results = retriever.search("项目bug修复", top_k=5)
 
 # 查看结果来源
 for r in results:
     print(f"{r.node.title}: {r.final_score:.3f}")
     if r.metadata.get('is_expanded'):
         print(f"  ↳ 扩散自: {r.metadata['expanded_from']}")
+
+# 基础检索（保留用于对比测试）
+results = retriever.search_basic("项目bug修复", top_k=5)
 ```
 
 ### CLI 查询 Skill
@@ -110,25 +108,35 @@ for r in results:
 ```bash
 # 安装 skill 后使用
 python -m memora_query "那个项目"
-python -m memora_query "特朗普" --method hybrid --top-k 10
+python -m memora_query "特朗普" --top-k 10
 python -m memora_query "新闻" --tags news,tech --days 7
 python -m memora_query --stats  # 查看统计
 ```
 
-## Three Retrieval Methods
+## Retrieval Method (v3.0)
 
-| 方法 | 流程 | 适用场景 | Recall@5 | MRR | 速度 |
-|------|------|---------|---------|-----|------|
-| **standard** | TF-IDF召回100 → 语义精排 | 长查询(>20字) | 80.0% | 0.683 | ⚡ 0.35s |
-| **semantic_expansion** | 语义top-5 → 扩散50 → 精排 | 短/模糊查询(≤8字) | 73.3% | 0.592 | 🐢 1.20s |
-| **hybrid** ⭐ | TF-IDF召回10 → 扩散30 → 精排 | 中等查询(8-20字) | **86.7%** | **0.739** | ⚖️ 0.85s |
+**统一使用 Hybrid 方法** - TF-IDF召回 → 子图扩散 → 语义精排
 
-> 基于自建 测试集(30题)的基准测试结果
+| 指标 | 数值 |
+|------|------|
+| **Recall@1** | 80.0% |
+| **Recall@5** | 100.0% |
+| **MRR** | 0.857 |
+| **平均耗时** | ~1.2s/题 |
 
-**自动选择规则:**
-- ≤5字 → `semantic_expansion`
-- 6-20字 → `hybrid`
-- >20字 → `standard`
+**流程:**
+```
+TF-IDF召回10 → 子图扩散(最大50节点) → 语义精排 → top-5
+```
+
+**评分公式:**
+```
+final_score = (0.7 × semantic + 0.3 × pagerank + 0.1 × tfidf) × recency_penalty
+```
+
+> 基于 50题 Benchmark 测试 (v3.0) — `search()` 默认调用 Hybrid 方法
+> 
+> 基础两阶段检索 (`search_basic()`) 保留用于对比测试
 
 ## Storage Format
 
@@ -280,6 +288,9 @@ Memora/
 ## Recent Updates
 
 ### 2026-04-13
+- ✅ **v3.0 统一 Hybrid 检索** - `search()` 默认使用 Hybrid，简化 API
+- ✅ 重构 memora-query skill - 直接调用 Memora 核心，删除独立实现
+- ✅ 50题 Benchmark 测试 - Recall@5 100%, MRR 0.857
 - ✅ 修复 Skill 检测逻辑（排除 tool 返回内容，避免 list_dir 误报）
 - ✅ 统一 `add_memory_from_messages` API（自动检测 skills、格式化、打标签）
 - ✅ 优化检索公式权重（0.7语义 + 0.3PageRank + 0.1TF-IDF）
