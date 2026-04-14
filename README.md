@@ -323,9 +323,91 @@ open network_graph_10nodes.html
 | **memora-query** | 查询Memora记忆，支持三种检索模式 | `skills/memora-query/` |
 | **memora-bridge** | nanobot与Memora桥梁，自动保存对话 | `skills/memora-bridge/` |
 
+## Skill Quality & Self-Evolution System
+
+Memora 内置 Skill 质检与自进化闭环，实现 AI Agent 技能的持续优化：
+
+### 质检触发机制
+
+| 触发点 | Hook | 功能 |
+|--------|------|------|
+| `before_llm_call` | 技能选择后 | 质检本轮 tool_calls，判断是否使用最优 skill |
+| `on_response` | 对话结束后 | 智能判断对话价值，自动保存到记忆队列 |
+
+### 质检流程
+
+```
+nanobot 调用 tools → 触发 before_llm_call hook
+         ↓
+    提取本轮 tool_calls
+         ↓
+    skill_quality_judge 评估
+         ↓
+    双存储：
+    ├── 记忆节点 metadata (供向量检索)
+    └── skill/skill_status.md (供 skillX 推荐引擎)
+```
+
+### 质检标准
+
+| 状态 | 含义 | 示例 |
+|------|------|------|
+| `success` | 正确使用合适的 skill | 用 `memora-query` 检索记忆 |
+| `partial` | 可用 skill 但未使用，用了基础工具 | 用 `exec+grep` 而非 `memora-query` |
+| `failed` | skill 调用失败 | `ModuleNotFoundError` 等 |
+| `unknown` | 非 skill 类工具调用 | `read_file`, `edit_file` 等基础工具 |
+
+### 自进化闭环
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  1. 记录问题                                             │
+│     - skill_status.md 质检记录                          │
+│     - 包含：状态、原因、更优选择                          │
+└─────────────────────────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────┐
+│  2. 触发修复 (Heartbeat 或手动)                          │
+│     - 子 Agent 读取 skill_status.md                     │
+│     - 分析问题 skill 代码                                │
+│     - 执行修复（改代码/重命名/改配置）                    │
+└─────────────────────────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────┐
+│  3. 标记修复                                             │
+│     - 在 skill_status.md 追加修复状态标记                 │
+│     - 记录修复时间和内容                                 │
+└─────────────────────────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────┐
+│  4. 持续优化                                             │
+│     - 下次推荐时参考历史质检记录                          │
+│     - 问题 skill 自动降权，优质 skill 优先推荐            │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 质检数据格式
+
+```markdown
+## 质检记录 2026-04-14 20:12
+| Skill | 状态 | 原因 | 更优选择 |
+|-------|------|------|----------|
+| memora_query | failed | ModuleNotFoundError | - |
+| exec | partial | 使用了grep而非memora-query | memora-query |
+
+**修复状态**: ✅ 已修复 (2026-04-14 20:15)  
+**修复内容**: 目录重命名为 memora_runner，修复导入路径
+```
+
+---
+
 ## Recent Updates
 
 ### 2026-04-14
+- ✅ **Skill 质检与自进化闭环** - 新增 `skill_quality_judge` + `before_llm_call` hook
+  - 自动质检每次 tool_calls，判断是否使用最优 skill
+  - 双存储机制：记忆节点 metadata + `skill/skill_status.md`
+  - 支持子 Agent 自动修复问题 skill，标记修复状态
 - ✅ **Skill 质检双存储机制** - `skill_quality_judge` 结果同时写入：
   - 记忆节点 metadata（向量检索用）
   - `skill/skill_status.md`（skillX 推荐引擎用）

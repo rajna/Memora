@@ -499,10 +499,39 @@ def save_skill_status(quality_result: Dict[str, Any], dialogue_id: str = ""):
     """
     将质检结果保存到 memora/skill/skill_status.md
     
+    过滤规则：
+    - 纯基础工具操作（edit_file/read_file/exec/write_file/list_dir）完成常规代码任务时，不记录
+    - 需要记录的场景：使用了 skill、应该使用 skill 但没使用、skill 执行失败/部分成功
+    
     Args:
         quality_result: judge_skill_quality 返回的结果
         dialogue_id: 对话标识（可选）
     """
+    # 基础工具列表（这些不是 skill，只是基础文件/执行操作）
+    BASIC_TOOLS = {"read_file", "edit_file", "write_file", "list_dir", "exec"}
+    
+    skill_results = quality_result.get("skill_results", [])
+    
+    # 过滤：如果所有调用的都是基础工具，且没有更优选择，则不记录
+    if skill_results:
+        all_basic = all(
+            sr.get("skill") in BASIC_TOOLS 
+            for sr in skill_results
+        )
+        no_better_choice = all(
+            not sr.get("better_choice") or sr.get("better_choice") == "-"
+            for sr in skill_results
+        )
+        all_unknown = all(
+            sr.get("status") == "unknown"
+            for sr in skill_results
+        )
+        
+        # 同时满足：全是基础工具 + 没有更优选择 + 状态都是 unknown → 跳过
+        if all_basic and no_better_choice and all_unknown:
+            print(f"[Skill Status] 纯基础工具操作，跳过记录")
+            return None
+    
     # 确保目录存在
     skill_dir = Path("/Users/rama/.nanobot/workspace/memora/skill")
     skill_dir.mkdir(parents=True, exist_ok=True)
