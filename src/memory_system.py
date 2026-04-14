@@ -20,6 +20,7 @@ from .storage import MemoryStorage
 from .embeddings import get_embedding_manager, EmbeddingManager
 from .pagerank import MemoryGraph, build_and_rank
 from .retrieval import MemoryRetrieval, TwoStageRetriever
+from .skill_quality_judge import judge_skill_quality, format_quality_report, save_skill_status
 
 
 class Memora:
@@ -369,6 +370,7 @@ class Memora:
         title: Optional[str] = None,
         source: str = "auto-save",
         base_tags: Optional[List[str]] = None,
+        judge_quality: bool = True,
         **kwargs
     ) -> Optional[MemoryNode]:
         """
@@ -381,12 +383,14 @@ class Memora:
         4. 使用 TagGenerator 从内容生成相关标签
         5. 将 skills 作为标签添加
         6. 保存到记忆系统
+        7. 使用 LLM 判断 skill 执行质量（新增）
         
         Args:
             messages: 对话消息列表，每个消息是 dict，包含 role 和 content
             title: 可选，自定义标题
             source: 来源标记（auto-save, cli-import 等）
             base_tags: 基础标签列表
+            judge_quality: 是否使用 LLM 判断 skill 执行质量
             **kwargs: 传递给 add_memory 的其他参数
             
         Returns:
@@ -405,6 +409,17 @@ class Memora:
         
         # 检测 skills
         detected_skills = self.detect_skills_in_messages(messages)
+        
+        # LLM 质检 skill 执行质量（可选）
+        quality_result = None
+        if judge_quality:
+            quality_result = judge_skill_quality(messages)
+            # 同时保存到 skill_status.md 供后续分析
+            if quality_result:
+                try:
+                    save_skill_status(quality_result, dialogue_id=title[:50] if title else "")
+                except Exception as e:
+                    print(f"⚠️ 保存 skill 质检记录失败: {e}")
         
         # 格式化内容
         content = self.format_conversation(messages, detected_skills)
@@ -445,6 +460,17 @@ class Memora:
                         created_at = msg_time
                 except (ValueError, TypeError):
                     pass
+        
+        # 构建 metadata（包含质检结果）
+        metadata = kwargs.get('metadata', {})
+        if quality_result:
+            metadata['skill_quality'] = quality_result
+            # 也生成可读的质检报告追加到内容末尾
+            quality_report = format_quality_report(quality_result, detected_skills)
+            if quality_report:
+                content = content + "\n\n" + quality_report
+        
+        kwargs['metadata'] = metadata
         
         # 保存记忆（传入原始时间戳）
         return self.add_memory(

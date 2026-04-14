@@ -218,6 +218,8 @@ nanobot 通过 `on_response` hook 自动保存对话：
 
 ```
 Memora/
+├── logo.png                  # 品牌 Logo
+├── info.png                  # 系统架构图
 ├── src/                      # 核心源代码
 │   ├── config.py             # 配置
 │   ├── models.py             # 数据模型 (MemoryNode, SearchResult)
@@ -246,7 +248,12 @@ Memora/
 │   ├── generate_tags.py      # 生成标签
 │   ├── update_pagerank.py    # 更新PageRank
 │   ├── process_queue.py      # 处理待导入队列
-│   └── queue_watcher.py      # 队列监控
+│   ├── queue_watcher.py      # 队列监控
+│   ├── import_cli_direct.py  # CLI历史数据导入
+│   ├── generate_pagerank_graph.py  # PageRank可视化
+│   └── debug_*.py            # 调试工具
+│
+├── generate_network_graph.py # 记忆网络可视化（根目录）
 │
 ├── benchmark/                # Benchmark测试
 │   ├── benchmark_longmemeval.py
@@ -276,6 +283,31 @@ Memora/
 | `debug_graph.py` | 可视化链接图 | `python3 tools/debug_graph.py` |
 | `debug_pagerank.py` | 调试PageRank | `python3 tools/debug_pagerank.py` |
 
+### 可视化生成器
+
+**PageRank 图谱可视化** - 生成可交互的 PageRank 分布图
+```bash
+python tools/generate_pagerank_graph.py --data data/2026/04/05 --output pagerank_graph_20260405.html
+```
+- 响应式全屏布局
+- 彩色边类型：青色(语义相似度)、橙色(时间相邻)、紫色(共享标签)
+- Top PageRank 节点排行
+
+**记忆网络图** - 生成节点关系可视化（玻璃态卡片设计）
+```bash
+python generate_network_graph.py  # 使用最近10个节点
+```
+- 可拖拽卡片布局
+- 实时 SVG 连线
+- 三种链接类型切换
+- 展开详情面板
+
+**使用生成的可视化:**
+```bash
+open pagerank_graph_20260405.html
+open network_graph_10nodes.html
+```
+
 ## Why Pure Markdown?
 
 - **Human-readable**: 双击即可查看
@@ -293,7 +325,18 @@ Memora/
 
 ## Recent Updates
 
+### 2026-04-14
+- ✅ **Skill 质检双存储机制** - `skill_quality_judge` 结果同时写入：
+  - 记忆节点 metadata（向量检索用）
+  - `skill/skill_status.md`（skillX 推荐引擎用）
+- ✅ **质检纠错闭环** - 标记 `better_choice` 的 skill 自动降权，供后续推荐优化
+- ✅ **精简 process_queue.py** - 删除冗余代码 106 行，简化队列处理逻辑
+- ✅ **为 skillX 提供数据基础** - 质检记录现在可供推荐引擎读取分析
+
 ### 2026-04-13
+- ✅ **网络可视化** - 创建 `generate_network_graph.py`（玻璃态卡片 + 可拖拽 + SVG连线）
+- ✅ **PageRank 可视化** - `generate_pagerank_graph.py` 支持彩色边类型、响应式布局
+- ✅ **历史数据导入完成** - 4月全部数据 ~1100+ 节点已导入
 - ✅ **v3.0 统一 Hybrid 检索** - `search()` 默认使用 Hybrid，简化 API
 - ✅ 重构 memora-query skill - 直接调用 Memora 核心，删除独立实现
 - ✅ 50题 Benchmark 测试 - Recall@5 100%, MRR 0.857
