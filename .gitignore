@@ -1,6 +1,10 @@
 # Memora Generated Data & Logs
 # 这些文件是运行时生成的，不需要提交到git
 
+
+# skill
+skill/
+
 # benchmark
 config/
 
