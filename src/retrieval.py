@@ -51,36 +51,25 @@ class MemoryRetrieval:
         self.graph = MemoryGraph()
         self._cache: dict = {}  # 简单缓存
     
-    def _calculate_recency_penalty(self, node: MemoryNode) -> float:
+    def _calculate_recency_penalty(self, node: MemoryNode, query: str = "") -> float:
         """
-        计算时效性惩罚 - 惩罚新节点（而非旧节点）
-        
-        策略（逆向时效性）：
-        - 新节点（<7天）：惩罚因子 0.5（排名降权，可能是噪声）
-        - 较新节点（7-30天）：惩罚因子 0.8（轻微降权）
-        - 成熟节点（>30天）：无惩罚 = 1.0（优先返回）
-        - 极旧节点（>365天）：轻微降权 0.9（可能过时）
-        
-        核心逻辑：优先返回有链接关系、经过时间验证的成熟节点
-        而非刚创建、可能是临时的孤立节点
+        计算时效性惩罚
         
         Returns:
-            惩罚因子（1.0 = 无惩罚，0.5 = 严重降权）
+            惩罚因子（1.0 = 无惩罚）
         """
         days_old = (datetime.now() - node.created).days
         
-        # 极新节点：严重惩罚（可能是临时/测试内容）
         if days_old < 7:
-            return 0.3
-        # 较新节点：轻微惩罚
+            base_penalty = 0.8
         elif days_old < 30:
-            return 0.8
-        # 成熟节点：无惩罚（黄金期）
+            base_penalty = 0.85
         elif days_old < 365:
-            return 1.0
-        # 极旧节点：轻微惩罚（可能过时）
+            base_penalty = 1.00
         else:
-            return 0.9
+            base_penalty = 0.95
+        
+        return base_penalty
     
     def _normalize_pagerank(self, pagerank: float, all_pageranks: List[float]) -> float:
         """
@@ -219,7 +208,7 @@ class MemoryRetrieval:
             pagerank_score = self._normalize_pagerank(node.pagerank, all_pageranks)
             
             # 时效性惩罚（统一应用于所有节点，不区分重要/不重要）
-            recency_penalty = self._calculate_recency_penalty(node)
+            recency_penalty = self._calculate_recency_penalty(node, query)
             
             # 综合分数：语义 + PageRank + 时效性惩罚
             # 修复：所有节点统一应用惩罚，新节点(<7天)会被降权
@@ -358,16 +347,15 @@ class MemoryRetrieval:
             max_pr = max(all_pageranks) if all_pageranks else 1.0
             pagerank_score = node.pagerank / max_pr if max_pr > 0 else 1.0
             
-            # 时效性
             days_old = (datetime.now() - node.created).days
             if days_old < 7:
-                recency_penalty = 0.3
-            elif days_old < 30:
                 recency_penalty = 0.8
+            elif days_old < 30:
+                recency_penalty = 0.85
             elif days_old < 365:
-                recency_penalty = 1.0
+                recency_penalty = 1.00
             else:
-                recency_penalty = 0.9
+                recency_penalty = 0.95
             
             final_score = (
                 WEIGHT_SEMANTIC * semantic_score +
@@ -613,21 +601,17 @@ class TwoStageRetriever:
             else:
                 pagerank_score = 1.0
             
-            # === 规则2: 关键词高匹配(≥0.8)时，减轻新节点时效惩罚 ===
             days_old = (datetime.now() - node.created).days
-            
             if days_old < 7:
-                # 新节点基础惩罚 0.3，但关键词高匹配(≥0.8)时提升至 0.8
-                if keyword_score >= 0.8:
-                    recency_penalty = 0.8  # 高相关新内容，轻微降权
-                else:
-                    recency_penalty = 0.3  # 普通新内容，重度降权（避免噪声）
+                base_penalty = 0.8 if keyword_score < 0.8 else 0.85
             elif days_old < 30:
-                recency_penalty = 0.9  # 较新：轻微降权
+                base_penalty = 0.85 if keyword_score < 0.8 else 0.95
             elif days_old < 365:
-                recency_penalty = 1.0  # 成熟：黄金期
+                base_penalty = 1.00
             else:
-                recency_penalty = 0.9  # 极旧：轻微过时
+                base_penalty = 0.95
+            
+            recency_penalty = base_penalty
             
             # 计算最终分数
             base_score = (
@@ -854,16 +838,18 @@ class TwoStageRetriever:
             max_pr = max(all_pageranks) if all_pageranks else 1.0
             pagerank_score = node.pagerank / max_pr if max_pr > 0 else 1.0
             
-            # 时效性
+            
             days_old = (datetime.now() - node.created).days
             if days_old < 7:
-                recency_penalty = 0.3 if keyword_score < 0.8 else 0.8
+                base_penalty = 0.8 if keyword_score < 0.8 else 0.85
             elif days_old < 30:
-                recency_penalty = 0.9
+                base_penalty = 0.85 if keyword_score < 0.8 else 0.95
             elif days_old < 365:
-                recency_penalty = 1.0
+                base_penalty = 1.00
             else:
-                recency_penalty = 0.9
+                base_penalty = 0.95
+            
+            recency_penalty = min(1.0, base_penalty)
             
             # 综合分数（扩展节点应用折扣）
             base_score = (
@@ -927,7 +913,7 @@ class TwoStageRetriever:
         Returns:
             排序后的搜索结果
         """
-        from datetime import datetime
+        from datetime import datetime, timedelta
         
         print(f"[混合检索] 查询: '{query}'")
         print(f"[混合检索] 策略: TF-IDF召回{recall_k} → 扩散 → 语义精排")
@@ -1013,6 +999,9 @@ class TwoStageRetriever:
                     
                     linked_node = self.storage.load_by_url(link_url)
                     if linked_node:
+                        # 时间过滤：扩展节点也要符合时间范围
+                        if time_range_days and linked_node.created < cutoff:
+                            continue
                         expanded_nodes[link_url] = linked_node
                         expanded_from[link_url] = node.url
                         new_count += 1
@@ -1062,16 +1051,18 @@ class TwoStageRetriever:
             max_pr = max(all_pageranks) if all_pageranks else 1.0
             pagerank_score = node.pagerank / max_pr if max_pr > 0 else 1.0
             
-            # 时效性
+            
             days_old = (datetime.now() - node.created).days
             if days_old < 7:
-                recency_penalty = 0.3 if keyword_score < 0.8 else 0.8
+                base_penalty = 0.8 if keyword_score < 0.8 else 0.85
             elif days_old < 30:
-                recency_penalty = 0.9
+                base_penalty = 0.85 if keyword_score < 0.8 else 0.95
             elif days_old < 365:
-                recency_penalty = 1.0
+                base_penalty = 1.00
             else:
-                recency_penalty = 0.9
+                base_penalty = 0.95
+            
+            recency_penalty = min(1.0, base_penalty)
             
             # 综合分数（召回候选保留 TF-IDF 权重）
             base_score = (
@@ -1112,15 +1103,18 @@ class TwoStageRetriever:
             max_pr = max(all_pageranks) if all_pageranks else 1.0
             pagerank_score = node.pagerank / max_pr if max_pr > 0 else 1.0
             
+            
             days_old = (datetime.now() - node.created).days
             if days_old < 7:
-                recency_penalty = 0.3 if keyword_score < 0.8 else 0.8
+                base_penalty = 0.8 if keyword_score < 0.8 else 0.85
             elif days_old < 30:
-                recency_penalty = 0.9
+                base_penalty = 0.85 if keyword_score < 0.8 else 0.95
             elif days_old < 365:
-                recency_penalty = 1.0
+                base_penalty = 1.00
             else:
-                recency_penalty = 0.9
+                base_penalty = 0.95
+            
+            recency_penalty = min(1.0, base_penalty)
             
             # 扩展节点打折
             base_score = (
