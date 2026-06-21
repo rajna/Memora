@@ -3,7 +3,7 @@
 
 
 # skill
-skill/
+skill/*.md
 
 # benchmark
 config/
