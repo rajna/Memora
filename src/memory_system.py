@@ -10,6 +10,7 @@ Core Concept:
 """
 import os
 import re
+import asyncio
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pathlib import Path
@@ -20,7 +21,7 @@ from .storage import MemoryStorage
 from .embeddings import get_embedding_manager, EmbeddingManager
 from .pagerank import MemoryGraph, build_and_rank
 from .retrieval import MemoryRetrieval, TwoStageRetriever
-from .skill_quality_judge import judge_skill_quality, format_quality_report, save_skill_status
+from .skill_quality_judge import judge_skill_quality, judge_skill_quality_async, save_skill_status
 
 
 class Memora:
@@ -371,6 +372,7 @@ class Memora:
         source: str = "auto-save",
         base_tags: Optional[List[str]] = None,
         judge_quality: bool = True,
+        async_judge: bool = False,
         **kwargs
     ) -> Optional[MemoryNode]:
         """
@@ -383,7 +385,7 @@ class Memora:
         4. 使用 TagGenerator 从内容生成相关标签
         5. 将 skills 作为标签添加
         6. 保存到记忆系统
-        7. 使用 LLM 判断 skill 执行质量（新增）
+        7. 使用 LLM 判断 skill 执行质量（可选，支持异步）
         
         Args:
             messages: 对话消息列表，每个消息是 dict，包含 role 和 content
@@ -391,6 +393,7 @@ class Memora:
             source: 来源标记（auto-save, cli-import 等）
             base_tags: 基础标签列表
             judge_quality: 是否使用 LLM 判断 skill 执行质量
+            async_judge: 是否异步执行质检（不阻塞保存流程）
             **kwargs: 传递给 add_memory 的其他参数
             
         Returns:
@@ -412,7 +415,8 @@ class Memora:
         
         # LLM 质检 skill 执行质量（可选）
         quality_result = None
-        if judge_quality:
+        if judge_quality and not async_judge:
+            # 同步质检（阻塞）
             quality_result = judge_skill_quality(messages)
             # 同时保存到 skill_status.md 供后续分析
             if quality_result:
@@ -420,6 +424,34 @@ class Memora:
                     save_skill_status(quality_result, dialogue_id=title[:50] if title else "")
                 except Exception as e:
                     print(f"⚠️ 保存 skill 质检记录失败: {e}")
+        elif judge_quality and async_judge:
+            # 异步质检（后台执行，不阻塞）
+            # 获取或创建事件循环，启动后台任务
+            try:
+                loop = asyncio.get_running_loop()
+                # 创建后台任务，不等待结果
+                dialogue_id_for_save = title[:50] if title else ""
+                asyncio.create_task(
+                    judge_skill_quality_async(
+                        messages, 
+                        save_result=True, 
+                        dialogue_id=dialogue_id_for_save
+                    )
+                )
+                print(f"[Skill Judge] 已启动后台质检任务")
+            except RuntimeError:
+                # 没有运行中的事件循环，使用线程池异步执行
+                print(f"[Skill Judge] 在后台线程中执行质检...")
+                import threading
+                dialogue_id_for_save = title[:50] if title else ""
+                def _bg_judge():
+                    try:
+                        result = judge_skill_quality(messages)
+                        if result:
+                            save_skill_status(result, dialogue_id=dialogue_id_for_save)
+                    except Exception as e:
+                        print(f"⚠️ 后台质检失败: {e}")
+                threading.Thread(target=_bg_judge, daemon=True).start()
         
         # 格式化内容
         content = self.format_conversation(messages, detected_skills)
@@ -461,14 +493,11 @@ class Memora:
                 except (ValueError, TypeError):
                     pass
         
-        # 构建 metadata（包含质检结果）
+        # 构建 metadata（可选包含质检结果，但默认不追加到内容）
         metadata = kwargs.get('metadata', {})
-        if quality_result:
+        # 注意：质检结果已保存到 memora/skill/*.md，不重复追加到记忆内容
+        if quality_result and kwargs.get('include_quality_in_metadata', False):
             metadata['skill_quality'] = quality_result
-            # 也生成可读的质检报告追加到内容末尾
-            quality_report = format_quality_report(quality_result, detected_skills)
-            if quality_report:
-                content = content + "\n\n" + quality_report
         
         kwargs['metadata'] = metadata
         

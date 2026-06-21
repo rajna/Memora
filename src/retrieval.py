@@ -51,19 +51,30 @@ class MemoryRetrieval:
         self.graph = MemoryGraph()
         self._cache: dict = {}  # 简单缓存
     
-    def _calculate_recency_penalty(self, node: MemoryNode, query: str = "") -> float:
+    def _calculate_recency_penalty(self, node: MemoryNode, keyword_score: float = 0.0) -> float:
         """
-        计算时效性惩罚
+        计算时效性惩罚（统一版本）
         
+        关键逻辑：
+        - 7天内的新内容：基础惩罚0.8，高关键词匹配时提升至0.85
+        - 7-30天：基础惩罚0.85，高关键词匹配时提升至0.95  
+        - 30天-1年：无惩罚（1.0）
+        - 1年以上：轻微惩罚0.95（保留历史重要内容）
+        
+        Args:
+            node: 记忆节点
+            keyword_score: 关键词匹配分数（用于调整惩罚力度）
+            
         Returns:
-            惩罚因子（1.0 = 无惩罚）
+            惩罚因子（1.0 = 无惩罚，越低表示惩罚越重）
         """
         days_old = (datetime.now() - node.created).days
+        high_match = keyword_score >= 0.8
         
         if days_old < 7:
-            base_penalty = 0.8
+            base_penalty = 0.85 if high_match else 0.8
         elif days_old < 30:
-            base_penalty = 0.85
+            base_penalty = 0.95 if high_match else 0.85
         elif days_old < 365:
             base_penalty = 1.00
         else:
@@ -347,6 +358,7 @@ class MemoryRetrieval:
             max_pr = max(all_pageranks) if all_pageranks else 1.0
             pagerank_score = node.pagerank / max_pr if max_pr > 0 else 1.0
             
+            # 简化的时效惩罚（扩展节点使用）
             days_old = (datetime.now() - node.created).days
             if days_old < 7:
                 recency_penalty = 0.8
@@ -601,17 +613,8 @@ class TwoStageRetriever:
             else:
                 pagerank_score = 1.0
             
-            days_old = (datetime.now() - node.created).days
-            if days_old < 7:
-                base_penalty = 0.8 if keyword_score < 0.8 else 0.85
-            elif days_old < 30:
-                base_penalty = 0.85 if keyword_score < 0.8 else 0.95
-            elif days_old < 365:
-                base_penalty = 1.00
-            else:
-                base_penalty = 0.95
-            
-            recency_penalty = base_penalty
+            # 使用统一的时效惩罚计算
+            recency_penalty = self._calculate_recency_penalty(node, keyword_score)
             
             # 计算最终分数
             base_score = (
@@ -839,17 +842,8 @@ class TwoStageRetriever:
             pagerank_score = node.pagerank / max_pr if max_pr > 0 else 1.0
             
             
-            days_old = (datetime.now() - node.created).days
-            if days_old < 7:
-                base_penalty = 0.8 if keyword_score < 0.8 else 0.85
-            elif days_old < 30:
-                base_penalty = 0.85 if keyword_score < 0.8 else 0.95
-            elif days_old < 365:
-                base_penalty = 1.00
-            else:
-                base_penalty = 0.95
-            
-            recency_penalty = min(1.0, base_penalty)
+            # 使用统一的时效惩罚计算
+            recency_penalty = self._calculate_recency_penalty(node, keyword_score)
             
             # 综合分数（扩展节点应用折扣）
             base_score = (
@@ -889,7 +883,8 @@ class TwoStageRetriever:
         max_expanded: int = 50,      # 最大扩展节点数
         expansion_boost: float = 0.85, # 扩展节点分数折扣
         filter_tags: Optional[List[str]] = None,
-        time_range_days: Optional[int] = None
+        time_range_days: Optional[int] = None,
+        time_range: Optional[Tuple[datetime, datetime]] = None  # 精确时间范围 (start, end)
     ) -> List[SearchResult]:
         """
         混合检索：TF-IDF 召回 + 子图扩散 + 语义精排
@@ -904,11 +899,17 @@ class TwoStageRetriever:
         - 比纯 TF-IDF 召回全（扩散能发现关联内容）
         - 适合中等长度查询（5-20字）
         
+        修复(v3.8.1):
+        - 新增 time_range 参数支持精确时间范围过滤
+        - 扩散阶段也会检查 time_range（如果提供）
+        
         Args:
             recall_k: TF-IDF 第一阶段召回数量（默认10，平衡召回与扩散）
             expansion_depth: 图扩散深度（建议1，2开始变慢）
             max_expanded: 最大扩展节点数（防止爆炸）
             expansion_boost: 扩展节点分数折扣（<1降权）
+            time_range_days: 相对时间范围（最近N天）
+            time_range: 精确时间范围 (start_datetime, end_datetime)
         
         Returns:
             排序后的搜索结果
@@ -923,18 +924,24 @@ class TwoStageRetriever:
         
         candidates = self.storage.get_all()
         
-        # 过滤
+        # 过滤 - 同时支持 time_range_days 和精确 time_range
         if filter_tags:
             candidates = [
                 n for n in candidates
                 if any(str(t) in filter_tags for t in n.tags if t is not None)
             ]
         
-        if time_range_days:
+        # 优先使用精确的 time_range，其次使用 time_range_days
+        if time_range:
+            start_time, end_time = time_range
+            candidates = [n for n in candidates if start_time <= n.created <= end_time]
+            print(f"  精确时间范围过滤: {start_time} ~ {end_time}, 剩余 {len(candidates)} 个候选")
+        elif time_range_days:
             cutoff = datetime.now() - timedelta(days=time_range_days)
             candidates = [n for n in candidates if n.created >= cutoff]
         
         if not candidates:
+            print("  警告: 时间过滤后无候选节点")
             return []
         
         # 构建/使用 TF-IDF 索引
@@ -998,13 +1005,29 @@ class TwoStageRetriever:
                         break
                     
                     linked_node = self.storage.load_by_url(link_url)
-                    if linked_node:
-                        # 时间过滤：扩展节点也要符合时间范围
-                        if time_range_days and linked_node.created < cutoff:
+                    if not linked_node:
+                        continue
+                    
+                    # 时间过滤：扩展节点也要符合时间范围
+                    if time_range:
+                        # 使用精确时间范围过滤
+                        start_time, end_time = time_range
+                        if not (start_time <= linked_node.created <= end_time):
                             continue
-                        expanded_nodes[link_url] = linked_node
-                        expanded_from[link_url] = node.url
-                        new_count += 1
+                    elif time_range_days is not None:
+                        cutoff_time = datetime.now() - timedelta(days=time_range_days)
+                        if linked_node.created < cutoff_time:
+                            continue
+                    
+                    # 标签过滤：扩展节点也要符合标签要求
+                    if filter_tags:
+                        node_tags = [str(t).lower() for t in linked_node.tags if t is not None]
+                        if not any(ft.lower() in node_tags for ft in filter_tags):
+                            continue
+                    
+                    expanded_nodes[link_url] = linked_node
+                    expanded_from[link_url] = node.url
+                    new_count += 1
                 
                 if len(expanded_nodes) >= max_expanded:
                     break
@@ -1051,18 +1074,16 @@ class TwoStageRetriever:
             max_pr = max(all_pageranks) if all_pageranks else 1.0
             pagerank_score = node.pagerank / max_pr if max_pr > 0 else 1.0
             
-            
+            # 简化的时效惩罚
             days_old = (datetime.now() - node.created).days
             if days_old < 7:
-                base_penalty = 0.8 if keyword_score < 0.8 else 0.85
+                recency_penalty = 0.8
             elif days_old < 30:
-                base_penalty = 0.85 if keyword_score < 0.8 else 0.95
+                recency_penalty = 0.85
             elif days_old < 365:
-                base_penalty = 1.00
+                recency_penalty = 1.00
             else:
-                base_penalty = 0.95
-            
-            recency_penalty = min(1.0, base_penalty)
+                recency_penalty = 0.95
             
             # 综合分数（召回候选保留 TF-IDF 权重）
             base_score = (

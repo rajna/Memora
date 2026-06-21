@@ -2,15 +2,48 @@
 """
 Skill Quality Judge - 使用 LLM 判断对话中各 skill 的执行质量
 支持多模型配置，从配置文件读取
+支持同步和异步调用
 """
 import json
 import os
 import re
 import time
+import asyncio
+import threading
+import atexit
 import requests
 import yaml
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+
+# 全局线程池用于异步 LLM 调用（避免阻塞主流程）
+_llm_executor = None
+_llm_executor_lock = threading.Lock()
+
+def _get_executor():
+    """懒加载获取线程池，避免重复创建"""
+    global _llm_executor
+    if _llm_executor is None:
+        with _llm_executor_lock:
+            if _llm_executor is None:
+                _llm_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="llm_judge")
+    return _llm_executor
+
+def shutdown_executor(wait=True):
+    """
+    关闭线程池，释放资源
+    应在程序退出前调用
+    """
+    global _llm_executor
+    with _llm_executor_lock:
+        if _llm_executor is not None:
+            _llm_executor.shutdown(wait=wait)
+            _llm_executor = None
+            print("[Skill Judge] 线程池已关闭")
+
+# 注册退出时自动清理
+atexit.register(shutdown_executor, wait=False)
 
 
 # 默认配置（当配置文件不存在时使用）
@@ -448,7 +481,7 @@ def judge_skill_quality(
     model_name: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """
-    使用 LLM 判断对话中各 skill 的执行质量
+    使用 LLM 判断对话中各 skill 的执行质量（同步版本）
     
     Args:
         messages: 对话消息列表
@@ -508,6 +541,52 @@ def judge_skill_quality(
     except Exception as e:
         print(f"⚠️ 处理 LLM 返回时出错: {e}")
         return None
+
+
+async def judge_skill_quality_async(
+    messages: List[Dict[str, Any]],
+    model_name: Optional[str] = None,
+    save_result: bool = True,
+    dialogue_id: str = ""
+) -> Optional[Dict[str, Any]]:
+    """
+    使用 LLM 判断对话中各 skill 的执行质量（异步版本，不阻塞主流程）
+    
+    在线程池中执行同步的 LLM 调用，返回 awaitable 对象
+    适合在异步环境中调用，不会阻塞事件循环
+    
+    Args:
+        messages: 对话消息列表
+        model_name: 指定使用的模型名称，None 则使用默认模型
+        save_result: 是否自动保存结果到 skill_status.md
+        dialogue_id: 对话标识，用于保存结果
+        
+    Returns:
+        判断结果字典，包含 skill_results, overall_quality, summary
+        判断失败返回 None
+    """
+    if not messages:
+        return None
+    
+    # 在线程池中执行同步的质检
+    loop = asyncio.get_event_loop()
+    executor = _get_executor()
+    result = await loop.run_in_executor(
+        executor,
+        lambda: judge_skill_quality(messages, model_name)
+    )
+    
+    # 可选：异步保存结果
+    if save_result and result:
+        try:
+            await loop.run_in_executor(
+                executor,
+                lambda: save_skill_status(result, dialogue_id)
+            )
+        except Exception as e:
+            print(f"⚠️ 异步保存质检结果失败: {e}")
+    
+    return result
 
 
 def format_quality_report(quality_result: Dict[str, Any], detected_skills: List[str]) -> str:
