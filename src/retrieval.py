@@ -53,34 +53,38 @@ class MemoryRetrieval:
     
     def _calculate_recency_penalty(self, node: MemoryNode, keyword_score: float = 0.0) -> float:
         """
-        计算时效性惩罚（统一版本）
+        计算时效性衰减（越旧越衰减，新内容不受罚）
         
         关键逻辑：
-        - 7天内的新内容：基础惩罚0.8，高关键词匹配时提升至0.85
-        - 7-30天：基础惩罚0.85，高关键词匹配时提升至0.95  
-        - 30天-1年：无惩罚（1.0）
-        - 1年以上：轻微惩罚0.95（保留历史重要内容）
+        - 7天内：无衰减（1.0）
+        - 7-30天：轻微衰减 0.98
+        - 30-90天：衰减 0.96
+        - 90天-1年：衰减 0.94
+        - 1年-2年：衰减 0.92
+        - 2年以上：衰减 0.90
         
         Args:
             node: 记忆节点
-            keyword_score: 关键词匹配分数（用于调整惩罚力度）
+            keyword_score: 关键词匹配分数（用于调整衰减力度）
             
         Returns:
-            惩罚因子（1.0 = 无惩罚，越低表示惩罚越重）
+            衰减因子（1.0 = 无衰减，越低表示衰减越重）
         """
         days_old = (datetime.now() - node.created).days
         high_match = keyword_score >= 0.8
         
         if days_old < 7:
-            base_penalty = 0.85 if high_match else 0.8
+            return 1.00
         elif days_old < 30:
-            base_penalty = 0.95 if high_match else 0.85
+            return 0.99 if high_match else 0.98
+        elif days_old < 90:
+            return 0.97 if high_match else 0.96
         elif days_old < 365:
-            base_penalty = 1.00
+            return 0.95 if high_match else 0.94
+        elif days_old < 730:
+            return 0.93 if high_match else 0.92
         else:
-            base_penalty = 0.95
-        
-        return base_penalty
+            return 0.91 if high_match else 0.90
     
     def _normalize_pagerank(self, pagerank: float, all_pageranks: List[float]) -> float:
         """
@@ -218,15 +222,17 @@ class MemoryRetrieval:
             # PageRank分数（归一化）
             pagerank_score = self._normalize_pagerank(node.pagerank, all_pageranks)
             
-            # 时效性惩罚（统一应用于所有节点，不区分重要/不重要）
-            recency_penalty = self._calculate_recency_penalty(node, query)
+            # 时效性衰减（新内容不受罚，旧内容自然衰减）
+            recency_decay = self._calculate_recency_penalty(node, query)
             
-            # 综合分数：语义 + PageRank + 时效性惩罚
-            # 修复：所有节点统一应用惩罚，新节点(<7天)会被降权
+            # 高 PageRank 节点对抗时间衰减（核心知识不随时间老化）
+            effective_decay = recency_decay + (1.0 - recency_decay) * pagerank_score
+            
+            # 综合分数：语义 + PageRank × 时效保护
             final_score = (
                 WEIGHT_SEMANTIC * semantic_score +
                 WEIGHT_PAGERANK * pagerank_score
-            ) * recency_penalty
+            ) * effective_decay
             
             candidates_with_scores.append(SearchResult(
                 node=node,
@@ -456,9 +462,11 @@ class TwoStageRetriever:
         parts = []
         if node.title:
             parts.append(node.title)
-        parts.append(node.content)
         if node.tags:
-            parts.extend(str(t) for t in node.tags if t is not None)
+            for tag in node.tags:
+                if tag is not None:
+                    parts.extend([str(tag)] * 3)
+        parts.append(node.content)
         return ' '.join(parts)
     
     def _first_stage_recall(
@@ -878,7 +886,7 @@ class TwoStageRetriever:
         self,
         query: str,
         top_k: int = 10,
-        recall_k: int = 10,          # TF-IDF 召回数量（默认10，给扩散留空间）
+        recall_k: int = 20,          # TF-IDF 召回数量（默认20，给扩散留空间）
         expansion_depth: int = 1,    # 扩散深度
         max_expanded: int = 50,      # 最大扩展节点数
         expansion_boost: float = 0.85, # 扩展节点分数折扣
@@ -966,6 +974,23 @@ class TwoStageRetriever:
             # 关键词匹配增强
             keyword_score = self._fast_keyword_score(query, node)
             final_tfidf = max(tfidf_sim, keyword_score * 0.5)
+
+            content_lower = (node.content or "").lower()
+            query_lower = query.lower().strip()
+            if query_lower in content_lower:
+                final_tfidf = max(final_tfidf, 0.8)
+            else:
+                query_terms = [
+                    t for t in self.tfidf_mgr._tokenize(query_lower)
+                    if len(t.strip()) >= 2
+                ]
+                if query_terms:
+                    matched = sum(1 for term in query_terms if term in content_lower)
+                    coverage = matched / len(query_terms)
+                    if coverage >= 0.7:
+                        final_tfidf = max(final_tfidf, 0.55)
+                    elif coverage >= 0.5:
+                        final_tfidf = max(final_tfidf, 0.35)
             
             scored_candidates.append((node, final_tfidf))
         

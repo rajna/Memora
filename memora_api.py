@@ -232,6 +232,8 @@ class MemoraAPI(BaseHTTPRequestHandler):
                 messages=messages,
                 source=body.get("source", "pi-agent"),
                 base_tags=body.get("tags", ["pi-conversation"]),
+                judge_quality=body.get("judge_quality", True),
+                async_judge=body.get("async_judge", False),
             )
             if node:
                 self._json({"id": node.id, "title": node.title, "status": "saved"})
